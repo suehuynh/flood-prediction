@@ -87,11 +87,71 @@ fig.subplots_adjust(top = 0.97)
 plt.suptitle('Linearity between each of Predictors and Flood Probability', fontsize = 14)
 plt.show()
 
+# Feature Engineering
+BASE_FEATURES = df_test.columns
+
+def add_features(df):
+    df['total'] = df[BASE_FEATURES].sum(axis=1)
+    df['mean'] = df[BASE_FEATURES].mean(axis=1)
+    df['std'] = df[BASE_FEATURES].std(axis=1)
+    df['max'] = df[BASE_FEATURES].max(axis=1)
+    df['min'] = df[BASE_FEATURES].min(axis=1)
+    df['median'] = df[BASE_FEATURES].median(axis=1)
+    df['ptp'] = df[BASE_FEATURES].values.ptp(axis=1)
+    df['q25'] = df[BASE_FEATURES].quantile(0.25, axis=1)
+    df['q75'] = df[BASE_FEATURES].quantile(0.75, axis=1)
+    
+    df['ClimateImpact'] = df['MonsoonIntensity'] + df['ClimateChange']
+    df['AnthropogenicPressure'] = df['Deforestation'] + df['Urbanization'] + df['AgriculturalPractices'] + df['Encroachments']
+    df['InfrastructureQuality'] = df['DamsQuality'] + df['DrainageSystems'] + df['DeterioratingInfrastructure']
+    df['CoastalVulnerabilityTotal'] = df['CoastalVulnerability'] + df['Landslides']
+    df['PreventiveMeasuresEfficiency'] = df['RiverManagement'] + df['IneffectiveDisasterPreparedness'] + df['InadequatePlanning']
+    df['EcosystemImpact'] = df['WetlandLoss'] + df['Watersheds']
+    df['SocioPoliticalContext'] = df['PopulationScore'] * df['PoliticalFactors']
+
+
+    df['FloodVulnerabilityIndex'] = (df['AnthropogenicPressure'] + df['InfrastructureQuality'] +
+                                     df['CoastalVulnerabilityTotal'] + df['PreventiveMeasuresEfficiency']) / 4
+    
+    df['PopulationDensityImpact'] = df['PopulationScore'] * (df['Urbanization'] + df['Encroachments'])
+    
+    df['DeforestationUrbanizationRatio'] = df['Deforestation'] / df['Urbanization']
+    
+    df['AgriculturalEncroachmentImpact'] = df['AgriculturalPractices'] * df['Encroachments']
+    
+    df['DamDrainageInteraction'] = df['DamsQuality'] * df['DrainageSystems']
+    
+    df['LandslideSiltationInteraction'] = df['Landslides'] * df['Siltation']
+    
+    df['WatershedWetlandRatio'] = df['Watersheds'] / df['WetlandLoss']
+    
+    df['PoliticalPreparednessInteraction'] = df['PoliticalFactors'] * df['IneffectiveDisasterPreparedness']
+    
+    
+    df['TopographyDrainageSiltation'] = df['TopographyDrainage'] + df['Siltation']
+    
+    df['ClimateAnthropogenicInteraction'] = df['ClimateImpact'] * df['AnthropogenicPressure']
+    
+    df['InfrastructurePreventionInteraction'] = df['InfrastructureQuality'] * df['PreventiveMeasuresEfficiency']
+    
+    df['CoastalEcosystemInteraction'] = df['CoastalVulnerabilityTotal'] * df['EcosystemImpact']
+
+    return df
+
+df_train = add_features(df_train)
+df_test = add_features(df_test)
+
 # Data Preparation
 target = 'FloodProbability'
 features = [col for col in df_train.columns if col != target ]
 X = df_train[features]
 y = df_train[target]
+
+for column in X.columns:
+    X[column].replace([np.inf, -np.inf], np.nan, inplace = True)
+    mean = X[column].mean(skipna=True)
+    X[column].fillna(mean, inplace = True)
+X.isnull().any().sum()
 
 # Multiple Linear Regression
 lm = LinearRegression()
@@ -110,37 +170,31 @@ print('Slope:' ,lm.coef_)
 print('Intercept:', lm.intercept_) 
 print('R2 score: ', r2) 
 
+
 ############################## XGBoost ##############################
+# Create XGBoost model
+xgb = XGBRegressor(booster = 'gbtree',
+                   max_depth = 10,
+                   num_leaves = 250,
+                   reg_alpha = 0.1,
+                   reg_lambda = 3.25,
+                   learning_rate = 0.01,
+                   n_estimators = 3000,
+                   subsample_for_bin= 165700, 
+                   min_child_samples= 114, 
+                   colsample_bytree= 0.9634,
+                   subsample= 0.9592, 
+                   random_state = 0)
+
 n_splits = 5
 # Create a KFold cross-validator
 kf = KFold(n_splits = n_splits, shuffle = True, random_state = 42)
 
 scores = []
-xgb_params = {
-    'n_jobs': -1,
-    'max_depth': 15,
-    'max_leaves': 51,
-    'n_estimators': 1000,
-    'random_state': 42,
-    'objective': 'reg:gamma',
-    'grow_policy': 'depthwise',
-    'gamma': 0.001191175583365525,
-    'reg_alpha': 0.4922409840555407,
-    'subsample': 0.9043911969552909,
-    'reg_lambda': 0.2006103666827618,
-    'max_delta_step': 0.5187236006765079,
-    'learning_rate': 0.031068537109748533,
-    'colsample_bynode': 0.9056076202576685,
-    'min_child_weight': 0.1519636306480494,
-    'colsample_bytree': 0.8136171314595549,
-    'colsample_bylevel': 0.8469915838866402,
-}
 # Perform K-Fold Cross-Validation
 for train_index, val_index in kf.split(X):
     X_train, X_valid = X.iloc[train_index], X.iloc[val_index]
     y_train, y_valid = y[train_index], y[val_index]
-    # Create XGBoost model
-    xgb = XGBRegressor(**xgb_params)
     xgb.fit(X_train, y_train)
     y_pred = xgb.predict(X_valid)
     score = r2_score(y_valid, y_pred)
@@ -149,39 +203,12 @@ for train_index, val_index in kf.split(X):
 
 # Output the average R2 score across all folds
 print(f'Mean R2 score: {np.mean(scores):.5f}')
-#####################################################################
 
-############################## LGBM #################################
-n_splits = 5
-# Create a KFold cross-validator
-kf = KFold(n_splits = n_splits, shuffle = True, random_state = 42)
-
-scores = []
-# Perform K-Fold Cross-Validation
-for train_index, val_index in kf.split(X):
-    X_train, X_valid = X.iloc[train_index], X.iloc[val_index]
-    y_train, y_valid = y[train_index], y[val_index]
-    # Create XGBoost model
-    lgbm = LGBMRegressor(objective = 'regression',
-                   boosting_type = 'gbdt',
-                   max_depth = 7,
-                   reg_alpha = 0.1,
-                   reg_lambda = 3.25,
-                   learning_rate = 0.05,
-                   n_estimators = 3000)
-    lgbm.fit(X_train, y_train)
-    y_pred = lgbm.predict(X_valid)
-    score = r2_score(y_valid, y_pred)
-    print(score)
-    scores.append(score)
-
-# Output the average R2 score across all folds
-print(f'Mean R2 score: {np.mean(scores):.5f}')
 #####################################################################
 
 ############################## CatBoost #############################
 # Create CatBoostRegressor model
-catb = CatBoostRegressor(n_estimators = 1000,
+catb = CatBoostRegressor(n_estimators = 3000,
                        learning_rate = 0.05,
                        verbose = 0)
 
@@ -195,7 +222,7 @@ for train_index, val_index in kf.split(X):
     X_train, X_valid = X.iloc[train_index], X.iloc[val_index]
     y_train, y_valid = y[train_index], y[val_index]
     catb.fit(X_train, y_train)
-    y_pred = xgb.predict(X_valid)
+    y_pred = catb.predict(X_valid)
     score = r2_score(y_valid, y_pred)
     print(score)
     scores.append(score)
@@ -205,15 +232,61 @@ print(f'Mean R2 score: {np.mean(scores):.5f}')
 
 #####################################################################
 
-# Ensemble
-X_submission = df_test[features]
-X_submission = df_test[features]
-y_xgb_pred = xgb.predict(X_submission)
-y_lgb_pred = lgb.predict(X_submission)
-y_lm_pred = lm.predict(X_submission)
-y_cat_pred = catb.predict(X_submission)
+############################## LGBM #################################
+n_splits = 5
+# Create a KFold cross-validator
+kf = KFold(n_splits = n_splits, shuffle = True, random_state = 42)
+# Create LGBM model
+lgbm = LGBMRegressor(objective = 'regression',
+               boosting_type = 'gbdt',
+               max_depth = 10,
+               num_leaves = 250,
+               reg_alpha = 0.1,
+               reg_lambda = 3.25,
+               learning_rate = 0.01,
+               n_estimators = 3000,
+               subsample_for_bin= 165700, 
+               min_child_samples= 114, 
+               colsample_bytree= 0.9634,
+               subsample= 0.9592, 
+               random_state = 0,
+               verbosity = -1)
+scores = []
+# Perform K-Fold Cross-Validation
+for train_index, val_index in kf.split(X):
+    X_train, X_valid = X.iloc[train_index], X.iloc[val_index]
+    y_train, y_valid = y[train_index], y[val_index]
+    lgbm.fit(X_train, y_train)
+    y_pred = lgbm.predict(X_valid)
+    score = r2_score(y_valid, y_pred)
+    print(score)
+    scores.append(score)
 
-y_submission_pred = 0.4*y_xgb_pred + 0.3*y_lgb_pred + 0.3*y_cat_pred
+# Output the average R2 score across all folds
+print(f'Mean R2 score: {np.mean(scores):.5f}')
+#####################################################################
+
+# Ensemble
+r1 = catb
+r2 = xgb
+#r3 = lgbm
+r4 = HistGradientBoostingRegressor(learning_rate = 0.05,
+                                   max_iter = 400)
+r5 = GradientBoostingRegressor(learning_rate = 0.05,
+                               n_estimators = 400)
+r6 = RandomForestRegressor(n_estimators = 400,
+                           max_depth = 4)
+r7 = LinearRegression()
+r8 = SVR(kernel='linear')
+
+stack = StackingCVRegressor(regressors=(r1, r2, r4, r5, r6, r7, r8),
+                            meta_regressor = CatBoostRegressor(verbose = 0),
+                            cv = KFold(n_splits=10))
+
+stack.fit(X, y)
+X_submission = df_test[features]
+y_submission_pred = stack.predict(X_submission)
+df_test.reset_index(inplace = True)
 submission = pd.DataFrame({
     "id": df_test["id"],
     "probability": y_submission_pred,
